@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import com.unellez.sggs.ui.theme.SGGSTheme
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalContext
 
 
 class MainActivity : ComponentActivity() {
@@ -266,8 +267,10 @@ fun PantallaFormulario(tramite: Tramite, onBackClick: () -> Unit) {
     var enviando by remember { mutableStateOf(false) }
     var mensajeResultado by remember { mutableStateOf("") }
 
+
     // NUEVA VARIABLE: Controla si mostramos la ventana de éxito
     var mostrarDialogoExito by remember { mutableStateOf(false) }
+    val context = LocalContext.current // Necesario para el PDF y los mensajes Toast
 
     val formularioValido by remember {
         derivedStateOf {
@@ -377,22 +380,32 @@ fun PantallaFormulario(tramite: Tramite, onBackClick: () -> Unit) {
         // --- NUEVO: LA VENTANA EMERGENTE (ALERT DIALOG) ---
         if (mostrarDialogoExito) {
             AlertDialog(
-                onDismissRequest = { /* No hacemos nada para obligar a presionar Entendido */ },
+                onDismissRequest = { /* Obligamos a presionar el botón */ },
                 title = {
                     Text(text = "¡Solicitud Exitosa!", fontWeight = FontWeight.Bold)
                 },
                 text = {
-                    Text("Tu solicitud para ${tramite.nombreTramite} ha sido enviada correctamente al sistema de la universidad.")
+                    Text("Tu solicitud para ${tramite.nombreTramite} ha sido enviada correctamente al sistema.")
                 },
                 confirmButton = {
                     Button(
                         onClick = {
+                            // 1. Obtenemos la cédula que escribió el estudiante
+                            val cedulaGuardada = respuestas["cedula"] ?: "Sin Cédula"
+
+                            // 2. Generamos el PDF usando el archivo que creaste
+                            generarComprobantePDF(context, tramite.nombreTramite, cedulaGuardada)
+
+                            // 3. Mostramos un mensaje rápido en pantalla (Toast)
+                            android.widget.Toast.makeText(context, "Comprobante guardado en Descargas", android.widget.Toast.LENGTH_LONG).show()
+
+                            // 4. Limpiamos y regresamos al menú
                             mostrarDialogoExito = false
-                            respuestas.clear() // Limpiamos la cédula y otros datos por seguridad
-                            onBackClick() // Ejecutamos la acción de retroceder al menú principal
+                            respuestas.clear()
+                            onBackClick()
                         }
                     ) {
-                        Text("Entendido")
+                        Text("Descargar PDF y Salir")
                     }
                 }
             )
