@@ -19,6 +19,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.unellez.sggs.ui.theme.SGGSTheme
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.derivedStateOf
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,7 +51,7 @@ fun AppNavegacion(modifier: Modifier = Modifier) {
                     tramiteSeleccionado = tramite
                     navController.navigate("formulario")
                 },
-                // NUEVO: Le decimos qué hacer cuando toque el botón de historial
+
                 onHistorialClick = {
                     navController.navigate("historial")
                 }
@@ -259,17 +261,30 @@ fun TarjetaTramite(tramite: Tramite, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PantallaFormulario(tramite: Tramite, onBackClick: () -> Unit) {
-    // Aquí guardaremos lo que el usuario escriba: clave (id del campo) -> valor (texto)
     val respuestas = remember { mutableStateMapOf<String, String>() }
+    val coroutineScope = rememberCoroutineScope()
+    var enviando by remember { mutableStateOf(false) }
+    var mensajeResultado by remember { mutableStateOf("") }
+
+    // NUEVA VARIABLE: Controla si mostramos la ventana de éxito
+    var mostrarDialogoExito by remember { mutableStateOf(false) }
+
+    val formularioValido by remember {
+        derivedStateOf {
+            val camposObligatorios = tramite.camposRequeridos.filter { it.obligatorio }
+            camposObligatorios.all { campo ->
+                val texto = respuestas[campo.idCampo]
+                !texto.isNullOrBlank()
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Solicitud") },
                 navigationIcon = {
-                    TextButton(onClick = onBackClick) {
-                        Text("← Atrás")
-                    }
+                    TextButton(onClick = onBackClick) { Text("← Atrás") }
                 }
             )
         }
@@ -287,39 +302,100 @@ fun PantallaFormulario(tramite: Tramite, onBackClick: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // EL MOTOR DINÁMICO
             LazyColumn(
-                modifier = Modifier.weight(1f), // Toma todo el espacio disponible
+                modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Iteramos sobre los campos que mandó la base de datos
                 items(tramite.camposRequeridos) { campo ->
+                    val textoActual = respuestas[campo.idCampo] ?: ""
+                    val mostrarError = campo.obligatorio && textoActual.isBlank()
+
                     OutlinedTextField(
-                        value = respuestas[campo.idCampo] ?: "",
-                        onValueChange = { nuevoTexto ->
-                            respuestas[campo.idCampo] = nuevoTexto // Guardamos lo que escribe
-                        },
-                        // Ponemos un asterisco si el JSON dice que es obligatorio
+                        value = textoActual,
+                        onValueChange = { nuevoTexto -> respuestas[campo.idCampo] = nuevoTexto },
                         label = { Text(campo.etiqueta + if (campo.obligatorio) " *" else "") },
                         modifier = Modifier.fillMaxWidth(),
-                        // Si el tipo es texto corto, no dejamos que dé saltos de línea
-                        singleLine = campo.tipo == "texto"
+                        singleLine = campo.tipo == "texto",
+                        isError = mostrarError,
+                        supportingText = {
+                            if (mostrarError) {
+                                Text("Este campo es obligatorio")
+                            }
+                        }
                     )
                 }
             }
 
-            // BOTÓN DE ENVÍO
             Button(
                 onClick = {
-                    // En el próximo paso conectaremos esto con tu doPost de Google Sheets
-                    println("Respuestas listas para enviar: ${respuestas.toMap()}")
+                    enviando = true
+                    mensajeResultado = ""
+                    coroutineScope.launch {
+                        try {
+                            val cedula = respuestas["cedula"] ?: "Sin Cédula"
+                            val solicitud = SolicitudRequest(
+                                cedulaUsuario = cedula,
+                                idTramite = tramite.idTramite,
+                                respuestasFormulario = respuestas.toMap()
+                            )
+                            val respuesta = RetrofitClient.apiService.enviarSolicitud(solicitud)
+
+                            // LÓGICA NUEVA: Si el servidor responde con éxito, abrimos la ventana
+                            if (respuesta.status == "success") {
+                                mostrarDialogoExito = true
+                            } else {
+                                mensajeResultado = respuesta.mensaje
+                            }
+
+                        } catch (e: Exception) {
+                            mensajeResultado = "Error al enviar: ${e.localizedMessage}"
+                        } finally {
+                            enviando = false
+                        }
+                    }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp)
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                enabled = !enviando && formularioValido
             ) {
-                Text("Enviar Solicitud")
+                if (enviando) {
+                    Text("Enviando...")
+                } else {
+                    Text("Enviar Solicitud")
+                }
             }
+
+            if (mensajeResultado.isNotEmpty()) {
+                Text(
+                    text = mensajeResultado,
+                    modifier = Modifier.padding(top = 16.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // --- NUEVO: LA VENTANA EMERGENTE (ALERT DIALOG) ---
+        if (mostrarDialogoExito) {
+            AlertDialog(
+                onDismissRequest = { /* No hacemos nada para obligar a presionar Entendido */ },
+                title = {
+                    Text(text = "¡Solicitud Exitosa!", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Text("Tu solicitud para ${tramite.nombreTramite} ha sido enviada correctamente al sistema de la universidad.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            mostrarDialogoExito = false
+                            respuestas.clear() // Limpiamos la cédula y otros datos por seguridad
+                            onBackClick() // Ejecutamos la acción de retroceder al menú principal
+                        }
+                    ) {
+                        Text("Entendido")
+                    }
+                }
+            )
         }
     }
 }
